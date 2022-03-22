@@ -59,17 +59,6 @@ struct thread_pool *thread_pool_new(int nthreads);
  */
 void thread_pool_shutdown_and_destroy(struct thread_pool *);
 
-/* A function pointer representing a 'fork/join' task.
- * Tasks are represented as a function pointer to a
- * function.
- * 'pool' - the thread pool instance in which this task
- *          executes
- * 'data' - a pointer to the data provided in thread_pool_submit
- *
- * Returns the result of its computation.
- */
-typedef void *(*fork_join_task_t)(struct thread_pool *pool, void *data);
-
 /*
  * Submit a fork join task to the thread pool and return a
  * future.  The returned future can be used in future_get()
