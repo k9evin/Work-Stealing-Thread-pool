@@ -3,13 +3,49 @@
  *
  * A work-stealing, fork-join thread pool.
  */
+#include <stdlib.h>
+#include <stdio.h>
+#include <semaphore.h>
+#include <pthread.h>
+
+#include "threadpool.h"
+#include "list.h"
+
+pthread_barrier_t worker_barrier;
 
 /*
  * Opaque forward declarations. The actual definitions of these
  * types will be local to your threadpool.c implementation.
  */
-struct thread_pool;
-struct future;
+struct thread_pool {
+    struct list global_queue;
+    struct list worker_list;
+    int nthreads;
+    int njobs;
+    pthread_mutex_t pool_mutex; 
+    pthread_cond_t pool_cond;   // conditional variable sends signal to worker
+    int destroy;                // 0 = false, 1 = true
+};
+
+
+struct future {
+    fork_join_task_t task;      // fork join task
+    void *args;                 // input data
+    void *result;               // the returned result
+    int status;                 // 2 = UNSCHEDULE, 1 = EXECUTING, 0 = FINISHED
+    sem_t completed;           // semaphore for ordering
+    struct list_elem elem;      // list element
+    struct thread_pool *pool;   // pointer to thread pool
+};
+
+struct worker {
+    struct thread_pool *pool;
+    struct list worker_queue;
+    struct list_elem elem;
+    pthread_t threadID;
+};
+
+static __thread struct worker *current_worker;
 
 /* Create a new thread pool with no more than n threads. */
 struct thread_pool *thread_pool_new(int nthreads);
