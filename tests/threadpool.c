@@ -3,46 +3,43 @@
  *
  * A work-stealing, fork-join thread pool.
  */
-#include <stdlib.h>
-#include <stdio.h>
-#include <semaphore.h>
-#include <pthread.h>
-
 #include "threadpool.h"
+
+#include <pthread.h>
+#include <semaphore.h>
+#include <stdio.h>
+#include <stdlib.h>
+
 #include "list.h"
 
-pthread_barrier_t worker_barrier;
-
-/*
- * Opaque forward declarations. The actual definitions of these
- * types will be local to your threadpool.c implementation.
- */
 struct thread_pool {
-    struct list global_queue;
-    struct list worker_list;
-    int nthreads;
-    int njobs;
-    pthread_mutex_t pool_mutex; 
-    pthread_cond_t pool_cond;   // conditional variable sends signal to worker
-    int destroy;                // 0 = false, 1 = true
+    struct list global_queue;          // the global queue list
+    struct list worker_list;           // the worker list
+    int nthreads;                      // number of threads
+    int njobs;                         // number of jobs
+    pthread_barrier_t worker_barrier;  // The barrier for worker
+    pthread_mutex_t pool_mutex;        // the mutex lock for acquiring pool data
+    pthread_mutex_t worker_mutex;  // the mutex lock for acquiring worker data
+    pthread_cond_t pool_cond;  // conditional variable sends signal to worker
+    int destroy;               // 0 = false, 1 = true
 };
 
-
 struct future {
-    fork_join_task_t task;      // fork join task
-    void *args;                 // input data
-    void *result;               // the returned result
-    int status;                 // 2 = UNSCHEDULE, 1 = EXECUTING, 0 = FINISHED
+    fork_join_task_t task;     // fork join task
+    void *args;                // input data
+    void *result;              // the returned result
+    int status;                // 2 = UNSCHEDULE, 1 = EXECUTING, 0 = FINISHED
     sem_t completed;           // semaphore for ordering
-    struct list_elem elem;      // list element
-    struct thread_pool *pool;   // pointer to thread pool
+    struct list_elem elem;     // list element
+    struct thread_pool *pool;  // pointer to thread pool
 };
 
 struct worker {
-    struct thread_pool *pool;
-    struct list worker_queue;
-    struct list_elem elem;
-    pthread_t threadID;
+    struct thread_pool *pool;     // the pointer for thread pool
+    struct list worker_queue;     // the local aka worker queue list
+    struct list_elem elem;        // A list of element
+    pthread_t threadID;           // the id of pthread
+    pthread_mutex_t local_mutex;  // the mutex lock for acquiring local data
 };
 
 static __thread struct worker *current_worker;
