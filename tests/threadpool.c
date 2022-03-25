@@ -245,7 +245,24 @@ struct future *thread_pool_submit(struct thread_pool *pool,
  * Returns the value returned by this task.
  */
 void *future_get(struct future *future) {
+    pthread_mutex_lock(&future->pool->pool_mutex);
 
+    if (future->status == 2 && current_worker != NULL &&
+        current_worker->pool == future->pool) {
+        future->status = 1;
+        future->pool->njobs = future->pool->njobs - 1;
+        list_remove(&future->elem);
+        pthread_mutex_unlock(&future->pool->pool_mutex);
+        future->result = (future->task)(future->pool, future->args);
+        // pthread_mutex_lock(&future->pool->pool_mutex);
+        future->status = 0;
+        sem_post(&future->completed);
+        // pthread_mutex_unlock(&future->pool->destroy);
+    } else {
+        pthread_mutex_unlock(&future->pool->pool_mutex);
+        sem_wait(&future->completed);
+    }
+    return future->result;
 }
 
 /* Deallocate this future.  Must be called after future_get() */
