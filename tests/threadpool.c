@@ -44,6 +44,102 @@ struct worker {
 
 static __thread struct worker *current_worker;
 
+static struct list_elem *work_steal(struct thread_pool *pool);
+
+static void *start_routine(void *args) {
+    struct thread_pool *pool = (struct thread_pool *)args;
+
+    // pthread_mutex_lock(&pool->pool_mutex);
+
+    for (struct list_elem *e = list_begin(&pool->worker_list);
+         e != list_end(&pool->worker_list);) {
+        struct worker *worker = list_entry(e, struct worker, elem);
+        if (worker->threadID == pthread_self()) {
+            worker->pool = pool;
+            current_worker = worker;
+            break;
+        } else {
+            e = list_next(e);
+        }
+    }
+    // pthread_mutex_unlock(&pool->pool_mutex);
+
+    for (;;) {
+        pthread_mutex_lock(&pool->pool_mutex);
+        while (list_empty(&pool->global_queue) && pool->njobs == 0 &&
+               pool->destroy == 0) {
+            pthread_cond_wait(&pool->pool_cond, &pool->pool_mutex);
+        }
+
+        if (pool->destroy) {
+            pthread_mutex_unlock(&pool->pool_mutex);
+            pthread_exit(NULL);
+        }
+
+        struct list_elem *l_elem = NULL;
+
+        // pthread_mutex_lock(&current_worker->local_mutex);
+
+        // check if the current worker's queue is empty
+        if (list_empty(&current_worker->worker_queue)) {
+            // pthread_mutex_unlock(&current_worker->local_mutex);
+            //  if the global queue is also empty, then current worker needs to
+            //  steal work from other workers' queue
+            if (list_empty(&pool->global_queue)) {
+                l_elem = work_steal(pool);
+            } else {
+                l_elem = list_pop_front(&pool->global_queue);
+            }
+        } else {
+            l_elem = list_pop_front(&current_worker->worker_queue);
+            // pthread_mutex_unlock(&current_worker->local_mutex);
+        }
+
+        struct future *future = list_entry(l_elem, struct future, elem);
+        future->status = 1;
+        pool->njobs--;
+        pthread_mutex_unlock(&pool->pool_mutex);
+
+        future->result = (future->task)(future->pool, future->args);
+        // pthread_mutex_lock(&pool->pool_mutex);
+        future->status = 0;
+        // pthread_mutex_unlock(&pool->pool_mutex);
+
+        sem_post(&future->completed);
+    }
+    return NULL;
+}
+
+/*Supports work stealing in the thread pool.*/
+static struct list_elem *work_steal(struct thread_pool *pool) {
+    // Acquiring the mutex for worker data
+    pthread_mutex_lock(&pool->worker_mutex);
+
+    // The element pointer that will iterate through the list
+    struct list_elem *element;
+
+    // Iterate through the entire list
+    for (element = list_begin(&pool->worker_list);
+         element != list_end(&pool->worker_list);) {
+        struct worker *new_worker = list_entry(element, struct worker, elem);
+        // If the list of worker queue is not empty
+        if (!list_empty(&new_worker->worker_queue)) {
+            // Release the mutex for worker data
+            pthread_mutex_unlock(&pool->worker_mutex);
+            // The element is removed from the back of the list
+            struct list_elem *new_elem =
+                list_pop_back(&new_worker->worker_queue);
+            return new_elem;
+        } else {
+            // Else returns the next element in the list
+            element = list_next(element);
+        }
+    }
+    // Release the mutex for worker data
+    pthread_mutex_unlock(&pool->worker_mutex);
+
+    return NULL;
+}
 
 /* Create a new thread pool with no more than n threads. */
 struct thread_pool *thread_pool_new(int nthreads) {
@@ -117,6 +213,28 @@ void thread_pool_shutdown_and_destroy(struct thread_pool *pool) {
  */
 struct future *thread_pool_submit(struct thread_pool *pool,
                                   fork_join_task_t task, void *data) {
+    pthread_mutex_lock(&pool->pool_mutex);
+    struct future *future_init = malloc(sizeof(struct future));
+
+    future_init->pool = pool;
+    future_init->task = task;
+    future_init->args = data;
+    future_init->status = 2;
+    future_init->result = NULL;
+
+    sem_init(&future_init->completed, 0, 0);
+
+    if (current_worker == NULL) {
+        list_push_back(&pool->global_queue, &future_init->elem);
+    } else {
+        list_push_front(&current_worker->worker_queue, &future_init->elem);
+    }
+    pool->njobs++;
+
+    pthread_cond_signal(&pool->pool_cond);
+    pthread_mutex_unlock(&pool->pool_mutex);
+
+    return future_init;
 }
 
 /* Make sure that the thread pool has completed the execution
@@ -127,6 +245,7 @@ struct future *thread_pool_submit(struct thread_pool *pool,
  * Returns the value returned by this task.
  */
 void *future_get(struct future *future) {
+
 }
 
 /* Deallocate this future.  Must be called after future_get() */
