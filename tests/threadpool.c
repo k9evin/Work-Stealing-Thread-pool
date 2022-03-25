@@ -49,8 +49,6 @@ static struct list_elem *work_steal(struct thread_pool *pool);
 static void *start_routine(void *args) {
     struct thread_pool *pool = (struct thread_pool *)args;
 
-    // pthread_mutex_lock(&pool->pool_mutex);
-
     for (struct list_elem *e = list_begin(&pool->worker_list);
          e != list_end(&pool->worker_list);) {
         struct worker *worker = list_entry(e, struct worker, elem);
@@ -62,7 +60,6 @@ static void *start_routine(void *args) {
             e = list_next(e);
         }
     }
-    // pthread_mutex_unlock(&pool->pool_mutex);
 
     for (;;) {
         pthread_mutex_lock(&pool->pool_mutex);
@@ -78,21 +75,17 @@ static void *start_routine(void *args) {
 
         struct list_elem *l_elem = NULL;
 
-        // pthread_mutex_lock(&current_worker->local_mutex);
-
         // check if the current worker's queue is empty
         if (list_empty(&current_worker->worker_queue)) {
-            // pthread_mutex_unlock(&current_worker->local_mutex);
             //  if the global queue is also empty, then current worker needs to
             //  steal work from other workers' queue
             if (list_empty(&pool->global_queue)) {
-                l_elem = work_steal(pool);
+                l_elem = work_stealing(pool);
             } else {
                 l_elem = list_pop_front(&pool->global_queue);
             }
         } else {
             l_elem = list_pop_front(&current_worker->worker_queue);
-            // pthread_mutex_unlock(&current_worker->local_mutex);
         }
 
         struct future *future = list_entry(l_elem, struct future, elem);
@@ -101,9 +94,7 @@ static void *start_routine(void *args) {
         pthread_mutex_unlock(&pool->pool_mutex);
 
         future->result = (future->task)(future->pool, future->args);
-        // pthread_mutex_lock(&pool->pool_mutex);
         future->status = 0;
-        // pthread_mutex_unlock(&pool->pool_mutex);
 
         sem_post(&future->completed);
     }
@@ -111,7 +102,7 @@ static void *start_routine(void *args) {
 }
 
 /*Supports work stealing in the thread pool.*/
-static struct list_elem *work_steal(struct thread_pool *pool) {
+static struct list_elem *work_stealing(struct thread_pool *pool) {
     // Acquiring the mutex for worker data
     pthread_mutex_lock(&pool->worker_mutex);
 
@@ -245,7 +236,24 @@ struct future *thread_pool_submit(struct thread_pool *pool,
  * Returns the value returned by this task.
  */
 void *future_get(struct future *future) {
+    pthread_mutex_lock(&future->pool->pool_mutex);
 
+    if (future->status == 2 && current_worker != NULL &&
+        current_worker->pool == future->pool) {
+        future->status = 1;
+        future->pool->njobs = future->pool->njobs - 1;
+        list_remove(&future->elem);
+        pthread_mutex_unlock(&future->pool->pool_mutex);
+        future->result = (future->task)(future->pool, future->args);
+        // pthread_mutex_lock(&future->pool->pool_mutex);
+        future->status = 0;
+        sem_post(&future->completed);
+        // pthread_mutex_unlock(&future->pool->destroy);
+    } else {
+        pthread_mutex_unlock(&future->pool->pool_mutex);
+        sem_wait(&future->completed);
+    }
+    return future->result;
 }
 
 /* Deallocate this future.  Must be called after future_get() */
