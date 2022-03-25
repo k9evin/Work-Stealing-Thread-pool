@@ -17,7 +17,6 @@ struct thread_pool {
     struct list worker_list;           // the worker list
     int nthreads;                      // number of threads
     int njobs;                         // number of jobs
-    pthread_barrier_t worker_barrier;  // The barrier for worker
     pthread_mutex_t pool_mutex;        // the mutex lock for acquiring pool data
     pthread_mutex_t worker_mutex;  // the mutex lock for acquiring worker data
     pthread_cond_t pool_cond;  // conditional variable sends signal to worker
@@ -44,10 +43,12 @@ struct worker {
 
 static __thread struct worker *current_worker;
 
-static struct list_elem *work_steal(struct thread_pool *pool);
+static struct list_elem *work_stealing(struct thread_pool *pool);
 
 static void *start_routine(void *args) {
     struct thread_pool *pool = (struct thread_pool *)args;
+
+    // pthread_mutex_lock(&pool->pool_mutex);
 
     for (struct list_elem *e = list_begin(&pool->worker_list);
          e != list_end(&pool->worker_list);) {
@@ -60,6 +61,7 @@ static void *start_routine(void *args) {
             e = list_next(e);
         }
     }
+    // pthread_mutex_unlock(&pool->pool_mutex);
 
     for (;;) {
         pthread_mutex_lock(&pool->pool_mutex);
@@ -75,8 +77,11 @@ static void *start_routine(void *args) {
 
         struct list_elem *l_elem = NULL;
 
+        // pthread_mutex_lock(&current_worker->local_mutex);
+
         // check if the current worker's queue is empty
         if (list_empty(&current_worker->worker_queue)) {
+            // pthread_mutex_unlock(&current_worker->local_mutex);
             //  if the global queue is also empty, then current worker needs to
             //  steal work from other workers' queue
             if (list_empty(&pool->global_queue)) {
@@ -86,6 +91,7 @@ static void *start_routine(void *args) {
             }
         } else {
             l_elem = list_pop_front(&current_worker->worker_queue);
+            // pthread_mutex_unlock(&current_worker->local_mutex);
         }
 
         struct future *future = list_entry(l_elem, struct future, elem);
@@ -159,7 +165,6 @@ struct thread_pool *thread_pool_new(int nthreads) {
     current_worker = NULL;
 
     pthread_mutex_unlock(&pool->pool_mutex);
-    // free(worker);
     return pool;
 }
 
@@ -186,7 +191,6 @@ void thread_pool_shutdown_and_destroy(struct thread_pool *pool) {
         struct worker *worker = list_entry(element, struct worker, elem);
         element = list_remove(element);
         free(worker);
-        // element = list_next(element);
     }
 
     free(pool);
@@ -245,10 +249,10 @@ void *future_get(struct future *future) {
         list_remove(&future->elem);
         pthread_mutex_unlock(&future->pool->pool_mutex);
         future->result = (future->task)(future->pool, future->args);
-        // pthread_mutex_lock(&future->pool->pool_mutex);
+
         future->status = 0;
         sem_post(&future->completed);
-        // pthread_mutex_unlock(&future->pool->destroy);
+
     } else {
         pthread_mutex_unlock(&future->pool->pool_mutex);
         sem_wait(&future->completed);
