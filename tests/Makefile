@@ -15,8 +15,8 @@ LDFLAGS=-pthread
 # CFLAGS=-pthread -Wall -O3 -Werror -Wmissing-prototypes -fopenmp -DNDEBUG -pg
 # LDFLAGS=-pthread -pg
 # for debugging, you may use these 2
-#LDFLAGS=-pthread -fsanitize=undefined
-#CFLAGS=-Wall -O0 -g -Werror -Wmissing-prototypes -fopenmp -fsanitize=undefined
+# LDFLAGS=-pthread -fsanitize=undefined
+# CFLAGS=-Wall -O0 -g -Werror -Wmissing-prototypes -fopenmp -fsanitize=undefined
 
 OBJ=threadpool.o list.o threadpool_lib.o
 
